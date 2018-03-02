@@ -1,16 +1,22 @@
 apiVersion: config.istio.io/v1alpha2
-kind: RouteRule
+kind: V1alpha2RouteRule
 metadata:
-  name: reviews-test-v2
+  name: reviews-default
 spec:
-  destination:
-    name: reviews
-  precedence: 2
-  match:
-    request:
-      headers:
-        cookie:
-          regex: "^(.*?;)?(user=jason)(;.*)?$"
-  route:
-  - labels:
-      version: v2
+  hosts:
+    - reviews
+  http:
+    - match:
+      - headers:
+          cookie:
+            regex: "^(.*?;)?(user=jason)(;.*)?$"
+      route:
+      - destination:
+          name: reviews
+          subset: v2
+        weight: 100
+    - route:
+      - destination:
+          name: reviews
+          subset: v1
+        weight: 100

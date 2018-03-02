@@ -1,48 +1,78 @@
 apiVersion: config.istio.io/v1alpha2
-kind: RouteRule
-metadata:
-  name: productpage-default
-spec:
-  ## Used by services inside the Kubernetes cluster
-  destination:
-    name: productpage
-  precedence: 1
-  route:
-  - labels:
-      version: v1
----
-apiVersion: config.istio.io/v1alpha2
-kind: RouteRule
+kind: DestinationRule
 metadata:
   name: reviews-default
 spec:
-  destination:
-    name: reviews
-  precedence: 1
-  route:
-  - labels:
-      version: v1
+  name: reviews
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+    - name: v2
+      labels:
+        version: v2
+    - name: v3
+      labels:
+        version: v3
 ---
 apiVersion: config.istio.io/v1alpha2
-kind: RouteRule
-metadata:
-  name: ratings-default
-spec:
-  destination:
-    name: ratings
-  precedence: 1
-  route:
-  - labels:
-      version: v1
----
-apiVersion: config.istio.io/v1alpha2
-kind: RouteRule
+kind: DestinationRule
 metadata:
   name: details-default
 spec:
-  destination:
-    name: details
-  precedence: 1
-  route:
-  - labels:
-      version: v1
+  name: details
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+    - name: v2
+      labels:
+        version: v2
+---
+apiVersion: config.istio.io/v1alpha2
+kind: DestinationRule
+metadata:
+  name: ratings-default
+spec:
+  name: ratings
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+    - name: v2 # FIXME: is there a vanilla v2?
+      labels:
+        version: v2
+    - name: v2-mysql # FIXME: why not use multiple labels?
+      labels:
+        version: v2-mysql
+    - name: v2-mysql-vm
+      labels:
+        version: v2-mysql-vm
+---
+apiVersion: config.istio.io/v1alpha2
+kind: V1alpha2RouteRule
+metadata:
+  name: reviews-default
+spec:
+  hosts:
+  - reviews
+  http:
+  - route:
+    - destination:
+        name: reviews
+        subset: v1
+      weight: 100
+---
+apiVersion: config.istio.io/v1alpha2
+kind: V1alpha2RouteRule
+metadata:
+  name: details-default
+spec:
+  hosts:
+  - details
+  http:
+  - route:
+    - destination:
+        name: details
+        subset: v1
+      weight: 100

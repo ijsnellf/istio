@@ -1,15 +1,17 @@
 apiVersion: config.istio.io/v1alpha2
-kind: RouteRule
+kind: V1alpha2RouteRule
 metadata:
   name: reviews-default
 spec:
-  destination:
-    name: reviews
-  precedence: 1
-  route:
-  - labels:
-      version: v1
-    weight: 50
-  - labels:
-      version: v3
-    weight: 50
+  hosts:
+    - reviews
+  http:
+    - route:
+      - destination:
+          name: reviews
+          subset: v1
+        weight: 50
+      - destination:
+          name: reviews
+          subset: v3
+        weight: 50
