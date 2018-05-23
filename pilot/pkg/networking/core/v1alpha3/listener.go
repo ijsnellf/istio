@@ -385,7 +385,7 @@ func (configgen *ConfigGeneratorImpl) buildSidecarOutboundListeners(env model.En
 				var exists bool
 				if currentListener, exists = listenerMap[listenerMapKey]; exists {
 					// Check if this is HTTPS port collision. If so, we can use SNI to differentiate
-					if servicePort.Protocol != model.ProtocolHTTPS {
+					if servicePort.Protocol != model.ProtocolHTTPS || service.Hostname == "*" {
 						log.Warnf("Multiple TCP listener definitions for %s %v %s", listenerMapKey, currentListener, service.Hostname)
 						continue
 					}
@@ -395,7 +395,7 @@ func (configgen *ConfigGeneratorImpl) buildSidecarOutboundListeners(env model.En
 				}
 
 				// TODO (@rshriram): This is not sufficient. There are other TCP protocols that use SNI, that need to be tackled.
-				if servicePort.Protocol == model.ProtocolHTTPS {
+				if servicePort.Protocol == model.ProtocolHTTPS && service.Hostname != "*" {
 					filterChainOption.sniHosts = []string{service.Hostname.String()}
 				}
 
