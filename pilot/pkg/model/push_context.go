@@ -69,7 +69,7 @@ type PushContext struct {
 	//	ServiceAccounts map[string][]string
 	// Temp: the code in alpha3 should use VirtualService directly
 	VirtualServiceConfigs []Config `json:"-,omitempty"`
-
+	
 	destinationRuleHosts   []Hostname
 	destinationRuleByHosts map[Hostname]*combinedDestinationRule
 
@@ -286,6 +286,10 @@ func (ps *PushContext) VirtualServices(gateways map[string]bool) []Config {
 	return out
 }
 
+func (ps *PushContext) VirtualService(gateways map[string]bool, hostname Hostname) (Config, bool) {
+	return Config{}, false
+}
+
 // InitContext will initialize the data structures used for code generation.
 // This should be called before starting the push, from the thread creating
 // the push context.
@@ -323,7 +327,8 @@ func (ps *PushContext) initServiceRegistry(env *Environment) error {
 		return err
 	}
 	// Sort the services in order of creation.
-	ps.Services = sortServicesByCreationTime(services)
+	sortServicesByCreationTime(services)
+	ps.Services = services
 	for _, s := range services {
 		ps.ServiceByHostname[s.Hostname] = s
 	}
@@ -331,11 +336,10 @@ func (ps *PushContext) initServiceRegistry(env *Environment) error {
 }
 
 // sortServicesByCreationTime sorts the list of services in ascending order by their creation time (if available).
-func sortServicesByCreationTime(services []*Service) []*Service {
+func sortServicesByCreationTime(services []*Service) {
 	sort.SliceStable(services, func(i, j int) bool {
 		return services[i].CreationTime.Before(services[j].CreationTime)
 	})
-	return services
 }
 
 // Caches list of virtual services
@@ -344,7 +348,6 @@ func (ps *PushContext) initVirtualServices(env *Environment) error {
 	if err != nil {
 		return err
 	}
-
 	sortConfigByCreationTime(vservices)
 	ps.VirtualServiceConfigs = vservices
 	// convert all shortnames in virtual services into FQDNs

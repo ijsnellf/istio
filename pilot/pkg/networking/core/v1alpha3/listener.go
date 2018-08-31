@@ -385,6 +385,7 @@ func (c outboundListenerConflict) addMetric(push *model.PushContext) {
 // buildSidecarOutboundListeners generates http and tcp listeners for outbound connections from the service instance
 // TODO(github.com/istio/pilot/issues/237)
 //
+// FIXME: the doc below is out of date...
 // Sharing tcp_proxy and http_connection_manager filters on the same port for
 // different destination services doesn't work with Envoy (yet). When the
 // tcp_proxy filter's route matching fails for the http service the connection
