@@ -20,7 +20,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"istio.io/istio/pkg/test/framework/errors"
+	"istio.io/istio/pkg/test/framework/scopes"
+
+	"istio.io/istio/pkg/log"
 )
 
 // EnvironmentID is a unique identifier for a testing environment.
@@ -37,13 +39,14 @@ const (
 	Kubernetes = EnvironmentID("kubernetes")
 )
 
+var (
+	globalSettings = defaultSettings()
+)
+
 // Settings is the set of arguments to the test driver.
 type Settings struct {
 	// Environment to run the tests in. By default, a local environment will be used.
 	Environment EnvironmentID
-
-	// Path to kube config file. Required if the environment is kubernetes.
-	KubeConfig string
 
 	// TestID is the id of the test suite. This should supplied by the author once, and must be immutable.
 	TestID string
@@ -58,53 +61,47 @@ type Settings struct {
 	// os.TempDir() will be used.
 	WorkDir string
 
-	// Hub environment variable
-	Hub string
+	LogOptions *log.Options
+}
 
-	// Tag environment variable
-	Tag string
+// defaultSettings returns a default settings instance.
+func defaultSettings() *Settings {
+	o := log.DefaultOptions()
+
+	// Disable lab logging for the default run.
+	o.SetOutputLevel(scopes.CI.Name(), log.NoneLevel)
+
+	return &Settings{
+		Environment: Local,
+		LogOptions:  o,
+	}
 }
 
 // New returns settings built from flags and environment variables.
 func New(testID string) (*Settings, error) {
-	if err := processFlags(); err != nil {
-		return nil, err
-	}
+	// Copy the global settings.
+	s := &(*globalSettings)
 
-	// Make a local copy.
-	s := *settings
 	s.TestID = testID
 	s.RunID = generateRunID(testID)
 
-	if err := s.Validate(); err != nil {
+	if err := s.validate(); err != nil {
 		return nil, err
 	}
 
-	return &s, nil
-}
-
-// defaultSettings returns the default set of arguments.
-func defaultSettings() *Settings {
-	return &Settings{
-		Environment: Local,
-	}
+	return s, nil
 }
 
 // Validate the arguments.
-func (a *Settings) Validate() error {
+func (a *Settings) validate() error {
 	switch a.Environment {
 	case Local, Kubernetes:
-
 	default:
-		return errors.UnrecognizedEnvironment(string(a.Environment))
-	}
-
-	if a.Environment == Kubernetes && a.KubeConfig == "" {
-		return errors.MissingKubeConfigForEnvironment(string(Kubernetes), ISTIO_TEST_KUBE_CONFIG.Name())
+		return fmt.Errorf("unrecognized environment: %q", string(a.Environment))
 	}
 
 	if a.TestID == "" || len(a.TestID) > MaxTestIDLength {
-		return errors.InvalidTestID(MaxTestIDLength)
+		return fmt.Errorf("testID must be non-empty and cannot be longer than %d characters", MaxTestIDLength)
 	}
 
 	return nil
@@ -116,5 +113,8 @@ func generateRunID(testID string) string {
 	testID = strings.Replace(testID, "_", "-", -1)
 	// We want at least 6 characters of uuid padding
 	padding := MaxTestIDLength - len(testID)
+	if padding < 0 {
+		padding = 0
+	}
 	return fmt.Sprintf("%s-%s", testID, u[0:padding])
 }

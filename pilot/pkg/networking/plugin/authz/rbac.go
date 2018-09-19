@@ -67,7 +67,7 @@ const (
 	attrRequestAudiences   = "request.auth.audiences"      // intended audience(s) for this authentication information.
 	attrRequestPresenter   = "request.auth.presenter"      // authorized presenter of the credential.
 	attrRequestClaims      = "request.auth.claims"         // claim name is surrounded by brackets, e.g. "request.auth.claims[iss]".
-	attrRequestClaimGroups = "request.auth.claims[groups]" // groups claim".
+	attrRequestClaimGroups = "request.auth.claims[groups]" // groups claim.
 
 	// attributes that could be used in a ServiceRole constraint.
 	attrDestIP        = "destination.ip"        // supports both single ip and cidr, e.g. "10.1.2.3" or "10.1.0.0/16".
@@ -91,12 +91,17 @@ type serviceMetadata struct {
 }
 
 type rbacOption struct {
-	roles        []model.Config
-	bindings     []model.Config
-	forTCPFilter bool // The generated config is to be used by the Envoy network filter when true.
+	authzPolicies        *model.AuthorizationPolicies
+	forTCPFilter         bool // The generated config is to be used by the Envoy network filter when true.
+	globalPermissiveMode bool // True if global RBAC config is in permissive mode.
 }
 
 func createServiceMetadata(attr *model.ServiceAttributes, in *model.ServiceInstance) *serviceMetadata {
+	if attr.Namespace == "" {
+		rbacLog.Errorf("no namespace for service %v", in.Service.Hostname)
+		return nil
+	}
+
 	return &serviceMetadata{
 		name:   string(in.Service.Hostname),
 		labels: in.Labels,
@@ -189,13 +194,13 @@ func generateMetadataStringMatcher(keys []string, v *metadata.StringMatcher) *me
 	}
 }
 
-//Generate a metadata list matcher for the given path keys and value.
+// generateMetadataListMatcher generates a metadata list matcher for the given path keys and value.
 func generateMetadataListMatcher(keys []string, v string) *metadata.MetadataMatcher {
 	listMatcher := &metadata.ListMatcher{
 		MatchPattern: &metadata.ListMatcher_OneOf{
 			OneOf: &metadata.ValueMatcher{
 				MatchPattern: &metadata.ValueMatcher_StringMatch{
-					StringMatch: createStringMatcher(v, false),
+					StringMatch: createStringMatcher(v, false /* forceRegexPattern */, false /* forTCPFilter */),
 				},
 			},
 		},
@@ -219,7 +224,7 @@ func generateMetadataListMatcher(keys []string, v string) *metadata.MetadataMatc
 	}
 }
 
-// Generate keys for metadata paths
+// generateMetaKeys generates keys for metadata paths.
 func generateMetaKeys(k string) ([]string, error) {
 	var keys []string
 
@@ -240,7 +245,11 @@ func generateMetaKeys(k string) ([]string, error) {
 	return keys, nil
 }
 
-func createStringMatcher(v string, forceRegexPattern bool) *metadata.StringMatcher {
+func createStringMatcher(v string, forceRegexPattern, forTCPFilter bool) *metadata.StringMatcher {
+	extraPrefix := ""
+	if forTCPFilter {
+		extraPrefix = spiffePrefix
+	}
 	var stringMatcher *metadata.StringMatcher
 	// Check if v is "*" first to make sure we won't generate an empty prefix/suffix StringMatcher,
 	// the Envoy StringMatcher doesn't allow empty prefix/suffix.
@@ -259,13 +268,13 @@ func createStringMatcher(v string, forceRegexPattern bool) *metadata.StringMatch
 	} else if strings.HasSuffix(v, "*") {
 		stringMatcher = &metadata.StringMatcher{
 			MatchPattern: &metadata.StringMatcher_Prefix{
-				Prefix: v[:len(v)-1],
+				Prefix: extraPrefix + v[:len(v)-1],
 			},
 		}
 	} else {
 		stringMatcher = &metadata.StringMatcher{
 			MatchPattern: &metadata.StringMatcher_Exact{
-				Exact: v,
+				Exact: extraPrefix + v,
 			},
 		}
 	}
@@ -288,12 +297,12 @@ func createDynamicMetadataMatcher(k, v string) *metadata.MetadataMatcher {
 
 	// Handle the claims under attrRequestClaims
 	if len(keys) == 2 && keys[0] == attrRequestClaims {
-		//Generate a metadata list matcher for the given path keys and value.
-		//On proxy side, the value should be of list type.
+		// Generate a metadata list matcher for the given path keys and value.
+		// On proxy side, the value should be of list type.
 		return generateMetadataListMatcher(keys, v)
 	}
 
-	stringMatcher := createStringMatcher(v, forceRegexPattern)
+	stringMatcher := createStringMatcher(v, forceRegexPattern, false /* forTCPFilter */)
 
 	return generateMetadataStringMatcher(keys, stringMatcher)
 }
@@ -325,17 +334,25 @@ func (Plugin) OnInboundListener(in *plugin.InputParams, mutable *plugin.MutableO
 	if in.Node.Type != model.Sidecar {
 		return nil
 	}
+
 	svc := in.ServiceInstance.Service.Hostname
 	attr := in.ServiceInstance.Service.Attributes
-	if !isRbacEnabled(string(svc), attr.Namespace, in.Env.IstioConfigStore) {
+	authzPolicies := in.Env.PushContext.AuthzPolicies
+	rbacEnabled, globalPermissive := isRbacEnabled(string(svc), attr.Namespace, authzPolicies)
+	if !rbacEnabled {
 		return nil
 	}
 
+	service := createServiceMetadata(&attr, in.ServiceInstance)
+	if service == nil {
+		rbacLog.Errorf("failed to get service")
+		return nil
+	}
+	option := rbacOption{authzPolicies: authzPolicies, globalPermissiveMode: globalPermissive}
 	switch in.ListenerProtocol {
 	case plugin.ListenerProtocolTCP:
-		service := createServiceMetadata(&attr, in.ServiceInstance)
 		rbacLog.Debugf("building tcp filter config for %v", *service)
-		filter := buildTCPFilter(service, in.Env.IstioConfigStore)
+		filter := buildTCPFilter(service, option)
 		if filter != nil {
 			rbacLog.Infof("built tcp filter config for %s", service.name)
 			for cnum := range mutable.FilterChains {
@@ -343,9 +360,8 @@ func (Plugin) OnInboundListener(in *plugin.InputParams, mutable *plugin.MutableO
 			}
 		}
 	case plugin.ListenerProtocolHTTP:
-		service := createServiceMetadata(&attr, in.ServiceInstance)
 		rbacLog.Debugf("building http filter config for %v", *service)
-		filter := buildHTTPFilter(service, in.Env.IstioConfigStore)
+		filter := buildHTTPFilter(service, option)
 		if filter != nil {
 			rbacLog.Infof("built http filter config for %s", service.name)
 			for cnum := range mutable.FilterChains {
@@ -394,76 +410,36 @@ func isServiceInList(svc string, namespace string, li *rbacproto.RbacConfig_Targ
 	return false
 }
 
-func isRbacEnabled(svc string, ns string, store model.IstioConfigStore) bool {
-	var configProto *rbacproto.RbacConfig
-	config := store.RbacConfig()
-	if config != nil {
-		configProto = config.Spec.(*rbacproto.RbacConfig)
+func isRbacEnabled(svc string, ns string, authzPolicies *model.AuthorizationPolicies) (bool /*rbac enabed*/, bool /*permissive mode enabled globally*/) {
+	if authzPolicies == nil {
+		return false, false
 	}
+
+	configProto := authzPolicies.RbacConfig
 	if configProto == nil {
 		rbacLog.Debugf("disabled, no RbacConfig")
-		return false
+		return false, false
 	}
 
+	isPermissive := configProto.EnforcementMode == rbacproto.EnforcementMode_PERMISSIVE
 	switch configProto.Mode {
 	case rbacproto.RbacConfig_ON:
-		return true
+		return true, isPermissive
 	case rbacproto.RbacConfig_ON_WITH_INCLUSION:
-		return isServiceInList(svc, ns, configProto.Inclusion)
+		return isServiceInList(svc, ns, configProto.Inclusion), isPermissive
 	case rbacproto.RbacConfig_ON_WITH_EXCLUSION:
-		return !isServiceInList(svc, ns, configProto.Exclusion)
+		return !isServiceInList(svc, ns, configProto.Exclusion), isPermissive
 	default:
 		rbacLog.Debugf("rbac plugin disabled by RbacConfig: %v", *configProto)
-		return false
+		return false, isPermissive
 	}
 }
 
-// rbacPolicyForService returns the (ServiceRole, ServiceRoleBinding, error) for the service.
-func rbacPolicyForService(service *serviceMetadata, store model.IstioConfigStore) (
-	[]model.Config, []model.Config, error) {
-	namespace, present := service.attributes[attrDestNamespace]
-	if !present {
-		return nil, nil, fmt.Errorf("no namespace for service %v", service)
-	}
-
-	roles := store.ServiceRoles(namespace)
-	if roles == nil {
-		rbacLog.Infof("no service role in namespace %s", namespace)
-	}
-	bindings := store.ServiceRoleBindings(namespace)
-	if bindings == nil {
-		rbacLog.Infof("no service role binding in namespace %s", namespace)
-	}
-
-	return roles, bindings, nil
-}
-
-// roleToBindings returns a map that maps role name to its associated bindings.
-func roleToBindings(bindings []model.Config) map[string][]*rbacproto.ServiceRoleBinding {
-	roleToBinding := map[string][]*rbacproto.ServiceRoleBinding{}
-	for _, binding := range bindings {
-		bindingProto := binding.Spec.(*rbacproto.ServiceRoleBinding)
-		roleName := bindingProto.RoleRef.Name
-		if roleName == "" {
-			rbacLog.Errorf("ignored invalid binding %s in %s with empty RoleRef.Name",
-				binding.Name, binding.Namespace)
-			continue
-		}
-		roleToBinding[roleName] = append(roleToBinding[roleName], bindingProto)
-	}
-	return roleToBinding
-}
-
-func buildTCPFilter(service *serviceMetadata, store model.IstioConfigStore) *listener.Filter {
-	roles, bindings, err := rbacPolicyForService(service, store)
-	if err != nil {
-		rbacLog.Errorf("failed to get rbac policy: %v", err)
-		return nil
-	}
-
+func buildTCPFilter(service *serviceMetadata, option rbacOption) *listener.Filter {
+	option.forTCPFilter = true
 	// The result of convertRbacRulesToFilterConfig() is wrapped in a config for http filter, here we
 	// need to extract the generated rules and put in a config for network filter.
-	config := convertRbacRulesToFilterConfig(service, rbacOption{roles: roles, bindings: bindings, forTCPFilter: true})
+	config := convertRbacRulesToFilterConfig(service, option)
 	tcpConfig := listener.Filter{
 		Name: rbacTCPFilterName,
 		Config: util.MessageToStruct(&network_config.RBAC{
@@ -478,14 +454,9 @@ func buildTCPFilter(service *serviceMetadata, store model.IstioConfigStore) *lis
 
 // buildHTTPFilter builds the RBAC http filter that enforces the access control to the specified
 // service which is co-located with the sidecar proxy.
-func buildHTTPFilter(service *serviceMetadata, store model.IstioConfigStore) *http_conn.HttpFilter {
-	roles, bindings, err := rbacPolicyForService(service, store)
-	if err != nil {
-		rbacLog.Errorf("failed to get rbac policy: %v", err)
-		return nil
-	}
-
-	config := convertRbacRulesToFilterConfig(service, rbacOption{roles: roles, bindings: bindings, forTCPFilter: false})
+func buildHTTPFilter(service *serviceMetadata, option rbacOption) *http_conn.HttpFilter {
+	option.forTCPFilter = false
+	config := convertRbacRulesToFilterConfig(service, option)
 	rbacLog.Debugf("generated http filter config: %v", *config)
 	return &http_conn.HttpFilter{
 		Name:   rbacHTTPFilterName,
@@ -506,26 +477,27 @@ func convertRbacRulesToFilterConfig(service *serviceMetadata, option rbacOption)
 		Policies: map[string]*policyproto.Policy{},
 	}
 
-	roleToBindings := roleToBindings(option.bindings)
-	for _, role := range option.roles {
+	namespace := service.attributes[attrDestNamespace]
+	roleToBindings := option.authzPolicies.RoleToBindingsForNamespace(namespace)
+	for _, role := range option.authzPolicies.RolesForNamespace(namespace) {
 		rbacLog.Debugf("checking role %v", role.Name)
 		permissions := make([]*policyproto.Permission, 0)
 		for i, rule := range role.Spec.(*rbacproto.ServiceRole).Rules {
 			if service.match(rule) {
 				rbacLog.Debugf("rules[%d] matched", i)
 				if option.forTCPFilter {
+					// TODO(yangminzhu): Move the validate logic to push context and add metrics.
 					if err := validateRuleForTCPFilter(rule); err != nil {
 						// It's a user misconfiguration if a HTTP rule is specified to a TCP service.
 						// For safety consideration, we ignore the whole rule which means no access is opened to
 						// the TCP service in this case.
-						// TODO(yangminzhu): Add metrics for this.
 						rbacLog.Debugf("rules[%d] ignored, found HTTP only rule for a TCP service: %v", i, err)
 						continue
 					}
 				}
 				// Generate the policy if the service is matched and validated to the services specified in
 				// ServiceRole.
-				permissions = append(permissions, convertToPermission(rule, option.forTCPFilter))
+				permissions = append(permissions, convertToPermission(rule))
 			}
 		}
 		if len(permissions) == 0 {
@@ -546,26 +518,46 @@ func convertRbacRulesToFilterConfig(service *serviceMetadata, option rbacOption)
 			continue
 		}
 
-		if len(enforcedPrincipals) != 0 {
-			rbac.Policies[role.Name] = &policyproto.Policy{
-				Permissions: permissions,
-				Principals:  enforcedPrincipals,
+		if option.globalPermissiveMode {
+			// If RBAC Config is set to permissive mode globally, all policies will be in
+			// permissive mode regardless its own mode.
+			ps := enforcedPrincipals
+			ps = append(ps, permissivePrincipals...)
+			if len(ps) != 0 {
+				permissiveRbac.Policies[role.Name] = &policyproto.Policy{
+					Permissions: permissions,
+					Principals:  ps,
+				}
 			}
-		}
+		} else {
+			if len(enforcedPrincipals) != 0 {
+				rbac.Policies[role.Name] = &policyproto.Policy{
+					Permissions: permissions,
+					Principals:  enforcedPrincipals,
+				}
+			}
 
-		if len(permissivePrincipals) != 0 {
-			permissiveRbac.Policies[role.Name] = &policyproto.Policy{
-				Permissions: permissions,
-				Principals:  permissivePrincipals,
+			if len(permissivePrincipals) != 0 {
+				permissiveRbac.Policies[role.Name] = &policyproto.Policy{
+					Permissions: permissions,
+					Principals:  permissivePrincipals,
+				}
 			}
 		}
+	}
+
+	// If RBAC Config is set to permissive mode globally, RBAC is transparent to users;
+	// when mapping to rbac filter config, there is only shadow rules(no normal rules).
+	if option.globalPermissiveMode {
+		return &http_config.RBAC{
+			ShadowRules: permissiveRbac}
 	}
 
 	return &http_config.RBAC{Rules: rbac, ShadowRules: permissiveRbac}
 }
 
 // convertToPermission converts a single AccessRule to a Permission.
-func convertToPermission(rule *rbacproto.AccessRule, forTCPFilter bool) *policyproto.Permission {
+func convertToPermission(rule *rbacproto.AccessRule) *policyproto.Permission {
 	rules := &policyproto.Permission_AndRules{
 		AndRules: &policyproto.Permission_Set{
 			Rules: make([]*policyproto.Permission, 0),
@@ -644,24 +636,18 @@ func convertToPrincipal(subject *rbacproto.Subject, forTCPFilter bool) *policypr
 				},
 			})
 		} else {
+			var id *policyproto.Principal
 			if forTCPFilter {
 				// Generate the user directly in Authenticated principal as metadata is not supported in
 				// TCP filter.
-				// TODO(yangminzhu): Support attrSrcNamespace and attrSrcPrincipal once
-				// https://github.com/envoyproxy/envoy/pull/4250 is merged.
-				ids.AndIds.Ids = append(ids.AndIds.Ids, &policyproto.Principal{
-					Identifier: &policyproto.Principal_Authenticated_{
-						Authenticated: &policyproto.Principal_Authenticated{
-							Name: spiffePrefix + subject.User,
-						},
-					},
-				})
+				m := createStringMatcher(subject.User, false /* forceRegexPattern */, forTCPFilter)
+				id = principalForStringMatcher(m)
 			} else {
 				// Generate the user field with attrSrcPrincipal in the metadata.
-				id := principalForKeyValue(attrSrcPrincipal, subject.User)
-				if id != nil {
-					ids.AndIds.Ids = append(ids.AndIds.Ids, id)
-				}
+				id = principalForKeyValue(attrSrcPrincipal, subject.User, forTCPFilter)
+			}
+			if id != nil {
+				ids.AndIds.Ids = append(ids.AndIds.Ids, id)
 			}
 		}
 	}
@@ -696,7 +682,7 @@ func convertToPrincipal(subject *rbacproto.Subject, forTCPFilter bool) *policypr
 					attrSrcPrincipal, subject.User)
 				continue
 			}
-			id := principalForKeyValue(k, v)
+			id := principalForKeyValue(k, v, forTCPFilter)
 			if id != nil {
 				ids.AndIds.Ids = append(ids.AndIds.Ids, id)
 			}
@@ -788,7 +774,19 @@ func permissionForKeyValues(key string, values []string) *policyproto.Permission
 // Create a Principal based on the key and the value.
 // key: the key of a subject property.
 // value: the value of a subject property.
-func principalForKeyValue(key, value string) *policyproto.Principal {
+// forTCPFilter: the principal is used in the TCP filter.
+func principalForKeyValue(key, value string, forTCPFilter bool) *policyproto.Principal {
+	if forTCPFilter {
+		switch key {
+		case attrSrcPrincipal:
+			m := createStringMatcher(value, false /* forceRegexPattern */, forTCPFilter)
+			return principalForStringMatcher(m)
+		case attrSrcNamespace:
+			m := createStringMatcher(fmt.Sprintf("*/ns/%s/*", value), true /* forceRegexPattern */, forTCPFilter)
+			return principalForStringMatcher(m)
+		}
+	}
+
 	switch {
 	case key == attrSrcIP:
 		cidr, err := convertToCidr(value)
@@ -821,5 +819,19 @@ func principalForKeyValue(key, value string) *policyproto.Principal {
 	default:
 		rbacLog.Errorf("ignored unsupported property key: %s", key)
 		return nil
+	}
+}
+
+// principalForStringMatcher generates a principal based on the string matcher.
+func principalForStringMatcher(m *metadata.StringMatcher) *policyproto.Principal {
+	if m == nil {
+		return nil
+	}
+	return &policyproto.Principal{
+		Identifier: &policyproto.Principal_Authenticated_{
+			Authenticated: &policyproto.Principal_Authenticated{
+				PrincipalName: m,
+			},
+		},
 	}
 }

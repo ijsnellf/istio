@@ -418,12 +418,22 @@ func TestHelmInject(t *testing.T) {
 			inputFile: "traffic-annotations-empty-includes.yaml",
 			wantFile:  "traffic-annotations-empty-includes.yaml.injected",
 		},
+		{
+			// Verifies that the status port annotation overrides the default.
+			inputFile: "status_annotations.yaml",
+			wantFile:  "status_annotations.yaml.injected",
+		},
+		{
+			// Verifies that the resource annotation overrides the default.
+			inputFile: "resource_annotations.yaml",
+			wantFile:  "resource_annotations.yaml.injected",
+		},
 	}
 
 	for ci, c := range cases {
 		inputFile := filepath.Join("testdata/webhook", c.inputFile)
 		wantFile := filepath.Join("testdata/webhook", c.wantFile)
-		testName := fmt.Sprintf("[%02d] %s", ci, c.inputFile)
+		testName := fmt.Sprintf("[%02d] %s", ci, c.wantFile)
 		t.Run(testName, func(t *testing.T) {
 			// Split multi-part yaml documents. Input and output will have the same number of parts.
 			inputYAMLs := splitYamlFile(inputFile, t)
@@ -689,7 +699,9 @@ func compareDeployments(got, want *extv1beta1.Deployment, name string, t *testin
 	gotIstioInit.TerminationMessagePolicy = wantIstioInit.TerminationMessagePolicy
 	gotIstioInit.SecurityContext.Privileged = wantIstioInit.SecurityContext.Privileged
 	gotIstioProxy := istioProxy(got, t)
+
 	wantIstioProxy := istioProxy(want, t)
+
 	gotIstioProxy.Image = wantIstioProxy.Image
 	gotIstioProxy.TerminationMessagePath = wantIstioProxy.TerminationMessagePath
 	gotIstioProxy.TerminationMessagePolicy = wantIstioProxy.TerminationMessagePolicy
@@ -882,10 +894,7 @@ func TestRunAndServe(t *testing.T) {
          "name":"istio-init",
          "resources":{
 
-         },
-         "terminationMessagePath":"/dev/termination-log",
-         "terminationMessagePolicy":"File",
-         "imagePullPolicy":"IfNotPresent"
+         }
       }
    },
    {
@@ -895,20 +904,14 @@ func TestRunAndServe(t *testing.T) {
          "name":"istio-proxy",
          "resources":{
 
-         },
-         "terminationMessagePath":"/dev/termination-log",
-         "terminationMessagePolicy":"File",
-         "imagePullPolicy":"IfNotPresent"
+         }
       }
    },
    {
       "op":"add",
       "path":"/spec/volumes/-",
       "value":{
-         "name":"istio-envoy",
-         "emptyDir":{
-
-         }
+         "name":"istio-envoy"
       }
    },
    {
