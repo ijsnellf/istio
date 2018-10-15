@@ -95,44 +95,45 @@ func newReverseRadix() *reverseRadix {
 //
 func (r *reverseRadix) Lookup(hostname Hostname) map[Hostname]Config {
 	configs := make(map[Hostname]Config)
-	s := string(hostname)
-	wildcard := strings.Contains(s, "*")
-	s = strings.Replace(s, "*", "", -1)
-	data := []byte(s)
-	reverse(data)
+	wildcard := strings.Contains(string(hostname), "*")
 
 	//
 	if wildcard {
-		r.radix.Root().WalkPrefix(data, func(k []byte, v interface{}) bool {
-			kCopy := make([]byte, len(k))
-			copy(kCopy, k)
-			reverse(kCopy)
+		r.radix.Root().WalkPrefix(r.toKey(hostname), func(k []byte, v interface{}) bool {
 			config, _ := v.(Config)
-			configs[Hostname(kCopy)] = config
+			configs[r.fromKey(k)] = config
 			return false
 		})
 	}
 
 	//
 	if !wildcard || len(configs) == 0 {
-		data := []byte(s)
-		reverse(data)
-		k, v, _ := r.radix.Root().LongestPrefix(data)
+		k, v, _ := r.radix.Root().LongestPrefix(r.toKey(hostname))
 		config, _ := v.(Config)
-		kCopy := make([]byte, len(k))
-		copy(kCopy, k)
-		reverse(kCopy)
-		configs[Hostname(kCopy)] = config
+		configs[r.fromKey(k)] = config
 	}
 
 	return configs
 }
 
 func (r *reverseRadix) Insert(hostname Hostname, config Config) {
+	r.radix, _, _ = r.radix.Insert(r.toKey(hostname), config)
+}
+
+// removes wildcard, reverses
+func (r *reverseRadix) toKey(hostname Hostname) []byte {
 	s := strings.Replace(string(hostname), "*", "", -1)
 	data := []byte(s)
 	reverse(data)
-	r.radix, _, _ = r.radix.Insert(data, config)
+	return data
+}
+
+// unreverses
+func (r *reverseRadix) fromKey(key []byte) Hostname {
+	data := make([]byte, len(key))
+	copy(data, key)
+	reverse(data)
+	return Hostname(data)
 }
 
 func reverse(data []byte) {

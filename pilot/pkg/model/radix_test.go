@@ -37,20 +37,6 @@ func TestReverseRadix(t *testing.T) {
 		}
 	}
 
-	// testCases := []struct{
-	// 	hostname Hostname
-	// 	configName string
-	// } {
-	// 	{"www.cnn.com", "cnn"},
-	// 	{"money.cnn.com", "cnn"},
-	// 	{"edition.cnn.com", "edition_cnn"},
-	// 	{"bbc.co.uk", "*.co.uk"},
-	// 	{"www.wikipedia.org", "*"},
-	// 	{"*.cnn.com", "cnn"},
-	// 	{"*.uk", "*.co.uk"},
-	// 	{"*", "oldest config"},
-	// }
-
 	testCases := []struct{
 		in Hostname
 		out Hostnames
@@ -59,24 +45,22 @@ func TestReverseRadix(t *testing.T) {
 		{"money.cnn.com", Hostnames{".cnn.com"}},
 		{"edition.cnn.com", Hostnames{"edition.cnn.com"}},
 		{"bbc.co.uk", Hostnames{".co.uk"}},
-		{"www.wikipedia.org", Hostnames{""}}, // wildcard
-		{"*.cnn.com", Hostnames{"www.cnn.com", ".cnn.com", "edition.cnn.com"}}, // what about *.com? what about just *?
-		{"*.com", Hostnames{".com", ".cnn.com", "www.cnn.com", "edition.cnn.com"}}, // what about *?
+		{"www.wikipedia.org", Hostnames{""}},
+		{"*.cnn.com", Hostnames{"www.cnn.com", ".cnn.com", "edition.cnn.com"}},
+		{"*.com", Hostnames{".com", ".cnn.com", "www.cnn.com", "edition.cnn.com"}},
 		{"*.uk", Hostnames{".co.uk"}},
-		//{"*", Hostnames{"www.cnn.com", ".cnn.com", ".com", "edition.cnn.com", "", ".co.uk"}},
 		{"*.istio.io", Hostnames{".io"}},
 		{"*.preliminary.io", Hostnames{".preliminary.io"}},
+		{"*.io", Hostnames{".io", ".preliminary.io"}},
+		{"nothing.nowhere.net", Hostnames{""}},
+		// {"*", Hostnames{"www.cnn.com", ".cnn.com", ".com", "edition.cnn.com", "", ".co.uk"}}, // this is a maintenance burden
 	}
 
 	for _, tt := range testCases {
-		// config, _ := r.MostSpecificHostMatch(tt.hostname)
-		// if config.Name != tt.configName {
-		// 	t.Errorf("f(%v) -> wanted %v, got %v", tt.hostname, tt.configName, config.Name)
-		// }
-
 		configs := r.Lookup(tt.in)
 		if len(tt.out) != len(configs) {
 			t.Errorf("f(%v) -> wanted len()=%v, got len()=%v", tt.in, len(tt.out), len(configs))
+			t.Errorf("%#v", configs)
 		}
 		for _, h := range tt.out {
 			if _, ok := configs[h]; !ok {
