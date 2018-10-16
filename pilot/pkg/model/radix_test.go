@@ -16,31 +16,32 @@ package model
 import (
 	"testing"
 )
-func TestReverseRadix(t *testing.T) {
-	r := newReverseRadix()
 
-	contents := []struct{
-		config Config
+func TestRadix(t *testing.T) {
+	r := newRadix()
+
+	contents := []struct {
+		config    Config
 		hostnames Hostnames
-	} {
-		{Config{ConfigMeta: ConfigMeta{Name:"cnn"}}, Hostnames{"www.cnn.com", "*.cnn.com", "*.com"}},
-		{Config{ConfigMeta: ConfigMeta{Name:"edition_cnn"}}, Hostnames{"edition.cnn.com"}},
-		{Config{ConfigMeta: ConfigMeta{Name:"*.co.uk"}}, Hostnames{"*.co.uk"}},
-		{Config{ConfigMeta: ConfigMeta{Name:"*"}}, Hostnames{"*"}},
-		{Config{ConfigMeta: ConfigMeta{Name:"io"}}, Hostnames{"*.io"}},
-		{Config{ConfigMeta: ConfigMeta{Name:"*.preliminary.io"}}, Hostnames{"*.preliminary.io"}},
+	}{
+		{Config{ConfigMeta: ConfigMeta{Name: "cnn"}}, Hostnames{"www.cnn.com", "*.cnn.com", "*.com"}},
+		{Config{ConfigMeta: ConfigMeta{Name: "edition_cnn"}}, Hostnames{"edition.cnn.com"}},
+		{Config{ConfigMeta: ConfigMeta{Name: "*.co.uk"}}, Hostnames{"*.co.uk"}},
+		{Config{ConfigMeta: ConfigMeta{Name: "*"}}, Hostnames{"*"}},
+		{Config{ConfigMeta: ConfigMeta{Name: "io"}}, Hostnames{"*.io"}},
+		{Config{ConfigMeta: ConfigMeta{Name: "*.preliminary.io"}}, Hostnames{"*.preliminary.io"}},
 	}
-	
+
 	for _, content := range contents {
 		for _, hostname := range content.hostnames {
 			r.Insert(hostname, content.config)
 		}
 	}
 
-	testCases := []struct{
-		in Hostname
+	testCases := []struct {
+		in  Hostname
 		out Hostnames
-	} {
+	}{
 		{"www.cnn.com", Hostnames{"www.cnn.com"}},
 		{"money.cnn.com", Hostnames{".cnn.com"}},
 		{"edition.cnn.com", Hostnames{"edition.cnn.com"}},
@@ -53,7 +54,7 @@ func TestReverseRadix(t *testing.T) {
 		{"*.preliminary.io", Hostnames{".preliminary.io"}},
 		{"*.io", Hostnames{".io", ".preliminary.io"}},
 		{"nothing.nowhere.net", Hostnames{""}},
-		// {"*", Hostnames{"www.cnn.com", ".cnn.com", ".com", "edition.cnn.com", "", ".co.uk"}}, // this is a maintenance burden
+		// {"*", Hostnames{"www.cnn.com", ".cnn.com", ".com", "edition.cnn.com", "", ".co.uk"}}, // maintenance burden
 	}
 
 	for _, tt := range testCases {
@@ -69,4 +70,3 @@ func TestReverseRadix(t *testing.T) {
 		}
 	}
 }
-
